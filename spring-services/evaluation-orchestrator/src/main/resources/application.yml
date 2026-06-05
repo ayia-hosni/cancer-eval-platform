@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: evaluation-orchestrator
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://cancer_user:cancer_pass@localhost:27017/cancer_results?authSource=admin}
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: orchestrator-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+
+ml:
+  timeout:
+    seconds: ${ML_TIMEOUT_SECONDS:15}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      ml-service:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        register-health-indicator: true
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics,circuitbreakers
+  metrics:
+    export:
+      prometheus:
+        enabled: true

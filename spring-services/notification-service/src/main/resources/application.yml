@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: notification-service
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: notification-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+server:
+  port: 8080
+risk:
+  threshold:
+    high: ${RISK_THRESHOLD_HIGH:0.75}
+    critical: ${RISK_THRESHOLD_CRITICAL:0.90}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics

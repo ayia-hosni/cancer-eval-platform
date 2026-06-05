@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: patient-service
+          uri: ${PATIENT_SERVICE_URL:http://patient-service:8080}
+          predicates:
+            - Path=/fhir/r4/Patient/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                redis-rate-limiter.requestedTokens: 1
+            - name: CircuitBreaker
+              args:
+                name: patient-cb
+                fallbackUri: forward:/fallback
+
+        - id: evaluation-orchestrator
+          uri: ${EVALUATION_SERVICE_URL:http://evaluation-orchestrator:8080}
+          predicates:
+            - Path=/fhir/r4/Evaluation/**
+
+        - id: notification-ws
+          uri: ws://notification-service:8080
+          predicates:
+            - Path=/ws/**
+
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin
+        - AddResponseHeader=X-Platform, cancer-eval-platform
+
+  data:
+    redis:
+      url: ${REDIS_URL:redis://redis:6379}
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics,gateway

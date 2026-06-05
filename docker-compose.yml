@@ -1,0 +1,208 @@
+version: "3.9"
+
+networks:
+  cancer-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  mongo-data:
+  redis-data:
+  zookeeper-data:
+  kafka-data:
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes: [zookeeper-data:/var/lib/zookeeper/data]
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s; timeout: 5s; retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on: [zookeeper]
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes: [kafka-data:/var/lib/kafka/data]
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s; timeout: 10s; retries: 5
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    depends_on: [kafka]
+    ports: ["8090:8080"]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: cancer-platform
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    networks: [cancer-net]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cancer_platform
+      POSTGRES_USER: cancer_user
+      POSTGRES_PASSWORD: cancer_pass
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cancer_user -d cancer_platform"]
+      interval: 10s; timeout: 5s; retries: 5
+
+  mongodb:
+    image: mongo:7.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: cancer_user
+      MONGO_INITDB_ROOT_PASSWORD: cancer_pass
+      MONGO_INITDB_DATABASE: cancer_results
+    volumes:
+      - mongo-data:/data/db
+      - ./infrastructure/mongo/init.js:/docker-entrypoint-initdb.d/init.js
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s; timeout: 5s; retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes: [redis-data:/data]
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s; timeout: 3s; retries: 5
+
+  # ── FastAPI ML services ───────────────────────────────────────────────────
+  tcga-profiler:
+    build: ./ml-services/tcga-profiler
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379
+      SERVICE_NAME: tcga-profiler
+    depends_on: [kafka, redis]
+    ports: ["8101:8000"]
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s; timeout: 5s; retries: 5
+
+  risk-classifier:
+    build: ./ml-services/risk-classifier
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379
+      SERVICE_NAME: risk-classifier
+    depends_on: [kafka, redis]
+    ports: ["8102:8000"]
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s; timeout: 5s; retries: 5
+
+  imaging-classifier:
+    build: ./ml-services/imaging-classifier
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379
+      SERVICE_NAME: imaging-classifier
+    depends_on: [kafka, redis]
+    ports: ["8103:8000"]
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s; timeout: 5s; retries: 5
+
+  survival-predictor:
+    build: ./ml-services/survival-predictor
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379
+      SERVICE_NAME: survival-predictor
+    depends_on: [kafka, redis]
+    ports: ["8104:8000"]
+    networks: [cancer-net]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s; timeout: 5s; retries: 5
+
+  shap-explainer:
+    build: ./ml-services/shap-explainer
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379
+      SERVICE_NAME: shap-explainer
+    depends_on: [kafka, redis]
+    ports: ["8105:8000"]
+    networks: [cancer-net]
+
+  # ── Spring Boot services ──────────────────────────────────────────────────
+  api-gateway:
+    build: ./spring-services/api-gateway
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      PATIENT_SERVICE_URL: http://patient-service:8080
+      EVALUATION_SERVICE_URL: http://evaluation-orchestrator:8080
+    depends_on: [kafka, redis, postgres]
+    ports: ["8080:8080"]
+    networks: [cancer-net]
+
+  patient-service:
+    build: ./spring-services/patient-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_URL: jdbc:postgresql://postgres:5432/cancer_platform
+      DB_USER: cancer_user
+      DB_PASS: cancer_pass
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379
+    depends_on: [kafka, postgres, redis]
+    ports: ["8081:8080"]
+    networks: [cancer-net]
+
+  evaluation-orchestrator:
+    build: ./spring-services/evaluation-orchestrator
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      KAFKA_BOOTSTRAP: kafka:9092
+      MONGO_URI: mongodb://cancer_user:cancer_pass@mongodb:27017/cancer_results?authSource=admin
+      REDIS_URL: redis://redis:6379
+      ML_TIMEOUT_SECONDS: 15
+    depends_on: [kafka, mongodb, redis]
+    ports: ["8082:8080"]
+    networks: [cancer-net]
+
+  notification-service:
+    build: ./spring-services/notification-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      KAFKA_BOOTSTRAP: kafka:9092
+      RISK_THRESHOLD_HIGH: "0.75"
+      RISK_THRESHOLD_CRITICAL: "0.90"
+    depends_on: [kafka]
+    ports: ["8083:8080"]
+    networks: [cancer-net]
+
+  audit-service:
+    build: ./spring-services/audit-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      KAFKA_BOOTSTRAP: kafka:9092
+      MONGO_URI: mongodb://cancer_user:cancer_pass@mongodb:27017/cancer_results?authSource=admin
+    depends_on: [kafka, mongodb]
+    ports: ["8084:8080"]
+    networks: [cancer-net]

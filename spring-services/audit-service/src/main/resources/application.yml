@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: audit-service
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://cancer_user:cancer_pass@localhost:27017/cancer_results?authSource=admin}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: audit-service-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+server:
+  port: 8080
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics

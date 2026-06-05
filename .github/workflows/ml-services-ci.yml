@@ -1,0 +1,150 @@
+name: ML Services CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'ml-services/**'
+      - '.github/workflows/ml-services-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'ml-services/**'
+
+jobs:
+  lint-and-test:
+    name: Lint + Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install shared dependencies
+        run: |
+          pip install ruff pytest httpx
+          pip install -r ml-services/risk-classifier/requirements.txt
+
+      - name: Ruff lint (all ML services)
+        run: ruff check ml-services/ --ignore E501
+
+      - name: Copy shared library into each service
+        run: |
+          for svc in tcga-profiler risk-classifier imaging-classifier survival-predictor shap-explainer; do
+            cp -r ml-services/shared ml-services/$svc/shared
+          done
+
+      - name: Unit tests — TCGA engine
+        run: |
+          cd ml-services/tcga-profiler
+          python -c "
+          from tcga_engine import TCGAProfiler
+          p = TCGAProfiler()
+          obs = p.profile({'ESR1':4.2,'ERBB2':-0.8,'MKI67':-1.5,'Stage_num':2.0}, 'p001')
+          assert obs.resourceType == 'Observation'
+          exts = {e.url:e for e in obs.extension}
+          assert exts['molecular-subtype'].valueString in ['Luminal A','Luminal B','HER2+','TNBC']
+          print('TCGA engine OK')
+          "
+
+      - name: Unit tests — Risk classifier
+        run: |
+          cd ml-services/risk-classifier
+          python -c "
+          from risk_engine import RiskClassifierEnsemble
+          e = RiskClassifierEnsemble()
+          obs = e.classify({'ESR1':4.2,'Stage_num':2.0,'Age':58.0}, 'p001')
+          assert 0 <= obs.valueQuantity.value <= 1
+          assert obs.interpretation[0].coding[0].code in ['L','N','H','CRITICAL']
+          print('Risk classifier OK — score:', obs.valueQuantity.value)
+          "
+
+      - name: Unit tests — DeepSurv
+        run: |
+          cd ml-services/survival-predictor
+          python -c "
+          from survival_engine import DeepSurvPredictor
+          p = DeepSurvPredictor()
+          obs = p.predict({'Age':58.0,'Stage_num':2.0,'MKI67':-1.5,'ESR1':4.2}, 'p001')
+          assert 1 <= obs.valueQuantity.value <= 200
+          exts = {e.url:e for e in obs.extension}
+          assert exts['risk-group'].valueString in ['Low','Medium','High']
+          print('DeepSurv OK — OS:', obs.valueQuantity.value, 'months')
+          "
+
+      - name: Unit tests — SHAP explainer
+        run: |
+          cd ml-services/shap-explainer
+          python -c "
+          import json
+          from shap_engine import SHAPExplainerEngine
+          e = SHAPExplainerEngine()
+          obs = e.explain({'ESR1':4.2,'Stage_num':2.0,'Age':58.0}, 'p001')
+          exts = {e.url:e for e in obs.extension}
+          attrs = json.loads(exts['shap-attribution'].valueString)
+          assert len(attrs) >= 5
+          assert all('feature' in a and 'shap_value' in a for a in attrs)
+          print('SHAP OK — top driver:', exts['top-risk-driver'].valueString)
+          "
+
+      - name: FHIR compliance check
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'ml-services/shared')
+          sys.path.insert(0, 'ml-services/risk-classifier')
+          from risk_engine import RiskClassifierEnsemble
+          obs = RiskClassifierEnsemble().classify({'Age':58.0}, 'p001')
+          d = obs.model_dump()
+          required = ['resourceType','id','status','code','subject','effectiveDateTime']
+          missing = [f for f in required if f not in d]
+          assert not missing, f'Missing FHIR fields: {missing}'
+          assert d['resourceType'] == 'Observation'
+          assert d['status'] == 'final'
+          print('FHIR R4 compliance: PASSED')
+          "
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for secrets (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trivy vulnerability scan — risk-classifier image
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: ml-services/risk-classifier
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          ignore-unfixed: true
+
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: [lint-and-test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy shared lib into services
+        run: |
+          for svc in tcga-profiler risk-classifier imaging-classifier survival-predictor shap-explainer; do
+            cp -r ml-services/shared ml-services/$svc/shared
+          done
+
+      - name: Build all FastAPI images
+        run: |
+          for svc in tcga-profiler risk-classifier imaging-classifier survival-predictor shap-explainer; do
+            echo "Building $svc..."
+            docker build -t cancer-platform/$svc:${{ github.sha }} ml-services/$svc/
+          done

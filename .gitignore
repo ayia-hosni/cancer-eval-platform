@@ -1,0 +1,83 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+env/
+*.so
+
+# ── Java / Maven ──────────────────────────────────────────────────────────
+target/
+*.jar
+*.war
+*.class
+.mvn/
+!.mvn/wrapper/maven-wrapper.properties
+!.mvn/wrapper/maven-wrapper.jar
+
+# ── ML model artefacts (large binaries — store in S3/DVC, not git) ────────
+*.pt
+*.pth
+*.pkl
+*.h5
+*.onnx
+*.bin
+models/
+model_weights/
+checkpoints/
+
+# ── Secrets — NEVER commit these ─────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+vault-token
+secrets/
+credentials/
+
+# ── IDE ───────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+Thumbs.db
+
+# ── Docker ───────────────────────────────────────────────────────────────
+.docker/
+docker-compose.override.yml
+
+# ── Logs / temp ───────────────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# ── Test artefacts ────────────────────────────────────────────────────────
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+test-results/
+surefire-reports/
+
+# ── Data / notebooks ─────────────────────────────────────────────────────
+*.csv
+*.tsv
+data/raw/
+*.ipynb_checkpoints/
